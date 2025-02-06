@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.10)
+cmake_minimum_required(VERSION 3.20)
 
 project(plugin_build_example)
 
@@ -11,13 +11,13 @@ find_package(CUDA REQUIRED)
 include_directories(${CUDA_INCLUDE_DIRS})
 
 # # tensorrt
-set(TENSORRT_INCLUDE_DIR /usr/local/TensorRT-8.4.1.5/include/)
-set(TENSORRT_LIBRARY_DIR /usr/local/TensorRT-8.4.1.5/lib/)
+set(TENSORRT_INCLUDE_DIR /usr/include/x86_64-linux-gnu)
+set(TENSORRT_LIBRARY_DIR /usr/lib/x86_64-linux-gnu)
 include_directories(${TENSORRT_INCLUDE_DIR})
 link_directories(${TENSORRT_LIBRARY_DIR})
 
-cuda_add_library(yolo SHARED ${PROJECT_SOURCE_DIR}/yololayer.cu
-                                                    )
+cuda_add_library(yolo SHARED ${PROJECT_SOURCE_DIR}/yololayer.cu)
+
 target_link_libraries(yolo nvinfer ${CUDA_LIBRARIES})
 
 add_definitions(-O2 -pthread)
