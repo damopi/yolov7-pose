@@ -68,7 +68,7 @@ namespace Yolo
 
 namespace nvinfer1
 {
-    class API YoloLayerPlugin : public IPluginV2IOExt
+    class API YoloLayerPlugin : public IPluginV2DynamicExt 
     {
     public:
         YoloLayerPlugin(int classCount, int netWidth, int netHeight, int maxOut, const std::vector<Yolo::YoloKernel>& vYoloKernel);
@@ -80,22 +80,24 @@ namespace nvinfer1
             return 1;
         }
 
-        Dims getOutputDimensions(int index, const Dims* inputs, int nbInputDims) TRT_NOEXCEPT override;
+        nvinfer1::DimsExprs getOutputDimensions(int32_t outputIndex, const nvinfer1::DimsExprs* inputs, int32_t nbInputs, nvinfer1::IExprBuilder& exprBuilder) TRT_NOEXCEPT override;
 
         int initialize() TRT_NOEXCEPT override;
 
         virtual void terminate() TRT_NOEXCEPT override {};
 
-        virtual size_t getWorkspaceSize(int maxBatchSize) const TRT_NOEXCEPT override { return 0; }
+        size_t getWorkspaceSize(const nvinfer1::PluginTensorDesc* inputs, int nbInputs,
+        const nvinfer1::PluginTensorDesc* outputs, int nbOutputs) const noexcept override { return 0; }
 
-        virtual int enqueue(int batchSize, const void* const* inputs, void*TRT_CONST_ENQUEUE* outputs, void* workspace, cudaStream_t stream) TRT_NOEXCEPT override;
+        int enqueue(const nvinfer1::PluginTensorDesc* inputDesc, const nvinfer1::PluginTensorDesc*  outputDesc,
+        void const* const* inputs, void* const* outputs, void* workspace, cudaStream_t stream) TRT_NOEXCEPT override;
 
         virtual size_t getSerializationSize() const TRT_NOEXCEPT override;
 
         virtual void serialize(void* buffer) const TRT_NOEXCEPT override;
 
-        bool supportsFormatCombination(int pos, const PluginTensorDesc* inOut, int nbInputs, int nbOutputs) const TRT_NOEXCEPT override {
-            return inOut[pos].format == TensorFormat::kLINEAR && inOut[pos].type == DataType::kFLOAT;
+        bool supportsFormatCombination(int pos, const nvinfer1::PluginTensorDesc* inOut, int nbInputs, int nbOutputs) noexcept override {
+            return inOut[pos].format == nvinfer1::TensorFormat::kLINEAR && inOut[pos].type == nvinfer1::DataType::kFLOAT;
         }
 
         const char* getPluginType() const TRT_NOEXCEPT override;
@@ -104,7 +106,7 @@ namespace nvinfer1
 
         void destroy() TRT_NOEXCEPT override;
 
-        IPluginV2IOExt* clone() const TRT_NOEXCEPT override;
+        IPluginV2DynamicExt* clone() const TRT_NOEXCEPT override;
 
         void setPluginNamespace(const char* pluginNamespace) TRT_NOEXCEPT override;
 
@@ -112,15 +114,18 @@ namespace nvinfer1
 
         DataType getOutputDataType(int index, const nvinfer1::DataType* inputTypes, int nbInputs) const TRT_NOEXCEPT override;
 
-        bool isOutputBroadcastAcrossBatch(int outputIndex, const bool* inputIsBroadcasted, int nbInputs) const TRT_NOEXCEPT override;
+        // bool isOutputBroadcastAcrossBatch(int outputIndex, const bool* inputIsBroadcasted, int nbInputs) const TRT_NOEXCEPT override;
 
-        bool canBroadcastInputAcrossBatch(int inputIndex) const TRT_NOEXCEPT override;
+        // bool canBroadcastInputAcrossBatch(int inputIndex) const TRT_NOEXCEPT override;
 
         void attachToContext(
             cudnnContext* cudnnContext, cublasContext* cublasContext, IGpuAllocator* gpuAllocator) TRT_NOEXCEPT override;
 
-        void configurePlugin(const PluginTensorDesc* in, int nbInput, const PluginTensorDesc* out, int nbOutput) TRT_NOEXCEPT override;
-        using IPluginV2Ext::configurePlugin;
+        void configurePlugin(const nvinfer1::DynamicPluginTensorDesc* in, int nbInput,
+        const nvinfer1::DynamicPluginTensorDesc* out, int nbOutput) noexcept override;
+
+        // using IPluginV2DynamicExt::configurePlugin;
+
         void detachFromContext() TRT_NOEXCEPT override;
 
     private:
@@ -147,11 +152,11 @@ namespace nvinfer1
 
         const char* getPluginVersion() const TRT_NOEXCEPT override;
 
-        const PluginFieldCollection* getFieldNames() TRT_NOEXCEPT override;
+        const PluginFieldCollection* getFieldNames() noexcept override;
 
-        IPluginV2IOExt* createPlugin(const char* name, const PluginFieldCollection* fc) TRT_NOEXCEPT override;
+        IPluginV2DynamicExt* createPlugin(const char* name, const PluginFieldCollection* fc) noexcept override;
 
-        IPluginV2IOExt* deserializePlugin(const char* name, const void* serialData, size_t serialLength) TRT_NOEXCEPT override;
+        IPluginV2DynamicExt* deserializePlugin(const char* name, const void* serialData, size_t serialLength) TRT_NOEXCEPT override;
 
         void setPluginNamespace(const char* libNamespace) TRT_NOEXCEPT override
         {

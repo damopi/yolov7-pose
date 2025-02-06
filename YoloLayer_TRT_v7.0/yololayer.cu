@@ -110,12 +110,17 @@ namespace nvinfer1
         return 0;
     }
 
-    Dims YoloLayerPlugin::getOutputDimensions(int index, const Dims* inputs, int nbInputDims) TRT_NOEXCEPT
+    nvinfer1::DimsExprs YoloLayerPlugin::getOutputDimensions(int index, const nvinfer1::DimsExprs* inputs, int nbInputDims, nvinfer1::IExprBuilder& exprBuilder) noexcept
     {
-        //output the result to channel
-        int totalsize = mMaxOutObject * sizeof(Detection) / sizeof(float);
+    assert(index < 1);
 
-        return Dims3(totalsize + 1, 1, 1);
+    nvinfer1::DimsExprs outputDims;
+    outputDims.nbDims = 3;
+    outputDims.d[0] = inputs->d[0];
+    outputDims.d[1] = exprBuilder.constant(57);
+    outputDims.d[2] = exprBuilder.constant(5701);
+
+    return outputDims;
     }
 
     // Set plugin namespace
@@ -135,22 +140,24 @@ namespace nvinfer1
         return DataType::kFLOAT;
     }
 
-    // Return true if output tensor is broadcast across a batch.
-    bool YoloLayerPlugin::isOutputBroadcastAcrossBatch(int outputIndex, const bool* inputIsBroadcasted, int nbInputs) const TRT_NOEXCEPT
-    {
-        return false;
-    }
+    // // Return true if output tensor is broadcast across a batch.
+    // bool YoloLayerPlugin::isOutputBroadcastAcrossBatch(int outputIndex, const bool* inputIsBroadcasted, int nbInputs) const TRT_NOEXCEPT
+    // {
+    //     return false;
+    // }
 
-    // Return true if plugin can use input that is broadcast across batch without replication.
-    bool YoloLayerPlugin::canBroadcastInputAcrossBatch(int inputIndex) const TRT_NOEXCEPT
-    {
-        return false;
-    }
+    // // Return true if plugin can use input that is broadcast across batch without replication.
+    // bool YoloLayerPlugin::canBroadcastInputAcrossBatch(int inputIndex) const TRT_NOEXCEPT
+    // {
+    //     return false;
+    // }
 
-    void YoloLayerPlugin::configurePlugin(const PluginTensorDesc* in, int nbInput, const PluginTensorDesc* out, int nbOutput) TRT_NOEXCEPT
+    void YoloLayerPlugin::configurePlugin(const nvinfer1::DynamicPluginTensorDesc* in, int nbInput, const nvinfer1::DynamicPluginTensorDesc* out, int nbOutput) TRT_NOEXCEPT
     {
+    assert(nbInput > 0);
+    assert(in->desc.format == nvinfer1::PluginFormat::kLINEAR);
+    assert(in->desc.dims.d != nullptr);
     }
-
     // Attach the plugin object to an execution context and grant the plugin the access to some context resource.
     void YoloLayerPlugin::attachToContext(cudnnContext* cudnnContext, cublasContext* cublasContext, IGpuAllocator* gpuAllocator) TRT_NOEXCEPT
     {
@@ -175,7 +182,7 @@ namespace nvinfer1
     }
 
     // Clone the plugin
-    IPluginV2IOExt* YoloLayerPlugin::clone() const TRT_NOEXCEPT
+    IPluginV2DynamicExt* YoloLayerPlugin::clone() const TRT_NOEXCEPT
     {
         YoloLayerPlugin* p = new YoloLayerPlugin(mClassCount, mYoloV5NetWidth, mYoloV5NetHeight, mMaxOutObject, mYoloKernel);
         p->setPluginNamespace(mPluginNamespace);
@@ -191,12 +198,21 @@ namespace nvinfer1
         int idx = threadIdx.x + blockDim.x * blockIdx.x;
         if (idx >= noElements) return;
 
+        __shared__ int shared_count;
+        if (threadIdx.x == 0) shared_count = 0;
+        __syncthreads();
+
         int total_grid = yoloWidth * yoloHeight;
-        int bnIdx = idx / total_grid;
-        idx = idx - total_grid * bnIdx;
+        // int bnIdx = idx / total_grid;
+        // idx = idx - total_grid * bnIdx;
         int info_len_i = 5 + classes;
         int info_len_kpt = KEY_POINTS_NUM * 3;
-        const float* curInput = input + bnIdx * ((info_len_i + info_len_kpt) * total_grid * CHECK_COUNT);
+        // const float* curInput = input + bnIdx * ((info_len_i + info_len_kpt) * total_grid * CHECK_COUNT);
+        const float* curInput = input;
+
+        // float *res_count = output + bnIdx * outputElem;
+
+        float *res_count = output;
 
         for (int k = 0; k < CHECK_COUNT; ++k) {
             float box_prob = Logist(curInput[idx + k * (info_len_i + info_len_kpt) * total_grid + 4 * total_grid]);
@@ -212,9 +228,10 @@ namespace nvinfer1
             // }
             float max_cls_prob = Logist(curInput[idx + k * (info_len_i + info_len_kpt) * total_grid + 5 * total_grid]);
 
-            float *res_count = output + bnIdx * outputElem;
-            int count = (int)atomicAdd(res_count, 1);
+            int count = atomicAdd(&shared_count, 1);
+            __syncthreads;
             if (count >= maxoutobject) return;
+            count = atomicAdd(res_count, 1);
             char *data = (char*)res_count + sizeof(float) + count * sizeof(Detection);
             Detection *det = (Detection*)(data);
 
@@ -260,7 +277,7 @@ namespace nvinfer1
     {
         int outputElem = 1 + mMaxOutObject * sizeof(Detection) / sizeof(float);
         for (int idx = 0; idx < batchSize; ++idx) {
-            CUDA_CHECK(cudaMemsetAsync(output + idx * outputElem, 0, sizeof(float), stream));
+            CUDA_CHECK(cudaMemsetAsync(output + idx * outputElem, 0, outputElem * sizeof(float), stream));
         }
         int numElem = 0;
         for (unsigned int i = 0; i < mYoloKernel.size(); ++i) {
@@ -269,13 +286,20 @@ namespace nvinfer1
             if (numElem < mThreadCount) mThreadCount = numElem;
 
             //printf("Net: %d  %d \n", mYoloV5NetWidth, mYoloV5NetHeight);
-            CalDetection << < (numElem + mThreadCount - 1) / mThreadCount, mThreadCount, 0, stream >> >
-                (inputs[i], output, numElem, mYoloV5NetWidth, mYoloV5NetHeight, mMaxOutObject, yolo.width, yolo.height, (float*)mAnchor[i], mClassCount, outputElem);
+            CalDetection << < (numElem + mThreadCount - 1) / mThreadCount, mThreadCount, 0, stream>>>(
+                inputs[i] + idx * numElem * (5 + mClassCount), 
+                image_output,  
+                numElem, 
+                mYoloV5NetWidth, mYoloV5NetHeight, 
+                mMaxOutObject, yolo.width, yolo.height, 
+                (float*)mAnchor[i], mClassCount, outputElem);
+            }
+
         }
     }
 
 
-    int YoloLayerPlugin::enqueue(int batchSize, const void* const* inputs, void* TRT_CONST_ENQUEUE* outputs, void* workspace, cudaStream_t stream) TRT_NOEXCEPT
+    int YoloLayerPlugin::enqueue(const nvinfer1::PluginTensorDesc* inputDesc, const nvinfer1::PluginTensorDesc*  outputDesc, void const* const* inputs, void* const* outputs, void* workspace, cudaStream_t stream) noexcept 
     {
         forwardGpu((const float* const*)inputs, (float*)outputs[0], stream, batchSize);
         return 0;
@@ -307,7 +331,7 @@ namespace nvinfer1
         return &mFC;
     }
 
-    IPluginV2IOExt* YoloPluginCreator::createPlugin(const char* name, const PluginFieldCollection* fc) TRT_NOEXCEPT
+    IPluginV2DynamicExt* YoloPluginCreator::createPlugin(const char* name, const PluginFieldCollection* fc) TRT_NOEXCEPT
     {
         // int class_count = 1;//p_netinfo[0];
         // int input_w = 960;//p_netinfo[1];
@@ -321,7 +345,7 @@ namespace nvinfer1
         return obj;
     }
 
-    IPluginV2IOExt* YoloPluginCreator::deserializePlugin(const char* name, const void* serialData, size_t serialLength) TRT_NOEXCEPT
+    IPluginV2DynamicExt* YoloPluginCreator::deserializePlugin(const char* name, const void* serialData, size_t serialLength) TRT_NOEXCEPT
     {
         // This object will be deleted when the network is destroyed, which will
         // call YoloLayerPlugin::destroy()
